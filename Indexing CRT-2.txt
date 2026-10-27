@@ -1,0 +1,503 @@
+Microsoft Windows [Version 10.0.19045.3693]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Users\Student> mongosh
+Current Mongosh Log ID: 671e4a1c9b2f3d5a7c8e1f20
+Connecting to:   mongodb://127.0.0.1:27017/?directConnection=true
+Using MongoDB:   7.0.12
+Using Mongosh:   2.2.10
+
+test> use studentdb
+switched to db studentdb
+
+studentdb> show collections
+
+studentdb>
+
+
+=====================================================================
+TASK 0: CREATE SAMPLE DATA
+=====================================================================
+
+studentdb> db.students.insertMany([
+...  { name: "Rahul",  email: "rahul@example.com",  age: 21, city: "Jaipur", course: "BCA",  marks: 78, skills: ["python","sql"] },
+...  { name: "Priya",  email: "priya@example.com",  age: 22, city: "Delhi",  course: "MCA",  marks: 91, skills: ["java","mongodb"] },
+...  { name: "Amit",   email: "amit@example.com",   age: 20, city: "Jaipur", course: "BCA",  marks: 65, skills: ["html","css"] },
+...  { name: "Sneha",  email: "sneha@example.com",  age: 23, city: "Pune",   course: "MBA",  marks: 84, skills: ["excel","sql"] },
+...  { name: "Karan",  email: "karan@example.com",  age: 21, city: "Delhi",  course: "BCA",  marks: 72, skills: ["python","mongodb"] },
+...  { name: "Neha",   email: "neha@example.com",   age: 22, city: "Jaipur", course: "MCA",  marks: 88, skills: ["java","python"] }
+... ])
+{
+  acknowledged: true,
+  insertedIds: {
+    '0': ObjectId('671e4a5e9b2f3d5a7c8e1f21'),
+    '1': ObjectId('671e4a5e9b2f3d5a7c8e1f22'),
+    '2': ObjectId('671e4a5e9b2f3d5a7c8e1f23'),
+    '3': ObjectId('671e4a5e9b2f3d5a7c8e1f24'),
+    '4': ObjectId('671e4a5e9b2f3d5a7c8e1f25'),
+    '5': ObjectId('671e4a5e9b2f3d5a7c8e1f26')
+  }
+}
+
+studentdb> db.students.countDocuments()
+6
+
+studentdb> // Add more data so index behaviour is easier to see
+studentdb> for (let i = 1; i <= 50000; i++) {
+...   db.students.insertOne({
+...     name: "Student" + i,
+...     email: "student" + i + "@example.com",
+...     age: 18 + (i % 10),
+...     city: ["Jaipur","Delhi","Pune","Mumbai","Kota"][i % 5],
+...     course: ["BCA","MCA","MBA","BTech"][i % 4],
+...     marks: Math.floor(Math.random() * 100),
+...     skills: ["python","java","sql","mongodb","html"].slice(i % 3, (i % 3) + 2)
+...   })
+... }
+{
+  acknowledged: true,
+  insertedId: ObjectId('671e4b1f9b2f3d5a7c8f0a00')
+}
+
+studentdb> db.students.countDocuments()
+50006
+
+
+=====================================================================
+TASK 1: INDEX CREATION (to improve query performance)
+=====================================================================
+
+studentdb> // Step 1: see existing indexes (only default _id index)
+studentdb> db.students.getIndexes()
+[ { v: 2, key: { _id: 1 }, name: '_id_' } ]
+
+studentdb> // Step 2: query WITHOUT an index
+studentdb> db.students.find({ email: "student45000@example.com" }).explain("executionStats").executionStats
+{
+  executionSuccess: true,
+  nReturned: 1,
+  executionTimeMillis: 38,
+  totalKeysExamined: 0,
+  totalDocsExamined: 50006,
+  ...
+}
+
+studentdb> // Step 3: create an index on email
+studentdb> db.students.createIndex({ email: 1 })
+email_1
+
+studentdb> // Step 4: run the same query again WITH the index
+studentdb> db.students.find({ email: "student45000@example.com" }).explain("executionStats").executionStats
+{
+  executionSuccess: true,
+  nReturned: 1,
+  executionTimeMillis: 0,
+  totalKeysExamined: 1,
+  totalDocsExamined: 1,
+  ...
+}
+
+studentdb> // Result: 50006 docs scanned  -->  1 doc scanned
+
+
+=====================================================================
+TASK 2: INDEX TYPES
+=====================================================================
+
+----- 2.1 SINGLE FIELD INDEX -----
+
+studentdb> db.students.createIndex({ marks: -1 })
+marks_-1
+
+studentdb> db.students.createIndex({ city: 1 }, { name: "idx_city" })
+idx_city
+
+----- 2.2 COMPOUND INDEX -----
+
+studentdb> db.students.createIndex({ course: 1, marks: -1 })
+course_1_marks_-1
+
+studentdb> db.students.find({ course: "BCA", marks: { $gt: 80 } }).explain().queryPlanner.winningPlan
+{
+  stage: 'FETCH',
+  inputStage: {
+    stage: 'IXSCAN',
+    keyPattern: { course: 1, marks: -1 },
+    indexName: 'course_1_marks_-1',
+    isMultiKey: false,
+    direction: 'forward',
+    indexBounds: {
+      course: [ '["BCA", "BCA"]' ],
+      marks: [ '[inf.0, 80)' ]
+    }
+  }
+}
+
+----- 2.3 MULTIKEY INDEX (on an array field) -----
+
+studentdb> db.students.createIndex({ skills: 1 })
+skills_1
+
+studentdb> db.students.find({ skills: "mongodb" }).explain().queryPlanner.winningPlan
+{
+  stage: 'FETCH',
+  inputStage: {
+    stage: 'IXSCAN',
+    keyPattern: { skills: 1 },
+    indexName: 'skills_1',
+    isMultiKey: true,
+    multiKeyPaths: { skills: [ 'skills' ] },
+    direction: 'forward',
+    indexBounds: { skills: [ '["mongodb", "mongodb"]' ] }
+  }
+}
+
+studentdb> // isMultiKey: true  --> MongoDB created one index entry per array element
+
+----- 2.4 UNIQUE INDEX (bonus) -----
+
+studentdb> db.students.createIndex({ name: 1, email: 1 }, { unique: true })
+name_1_email_1
+
+----- 2.5 LIST ALL INDEXES -----
+
+studentdb> db.students.getIndexes()
+[
+  { v: 2, key: { _id: 1 }, name: '_id_' },
+  { v: 2, key: { email: 1 }, name: 'email_1' },
+  { v: 2, key: { marks: -1 }, name: 'marks_-1' },
+  { v: 2, key: { city: 1 }, name: 'idx_city' },
+  { v: 2, key: { course: 1, marks: -1 }, name: 'course_1_marks_-1' },
+  { v: 2, key: { skills: 1 }, name: 'skills_1' },
+  { v: 2, key: { name: 1, email: 1 }, name: 'name_1_email_1', unique: true }
+]
+
+
+=====================================================================
+TASK 3: EXPLAIN PLAN (Identifying performance issues)
+=====================================================================
+
+studentdb> // COLLSCAN = bad (no index used), IXSCAN = good
+studentdb> db.students.find({ age: 21 }).explain("executionStats")
+{
+  queryPlanner: {
+    namespace: 'studentdb.students',
+    winningPlan: { stage: 'COLLSCAN', filter: { age: { '$eq': 21 } }, direction: 'forward' },
+    rejectedPlans: []
+  },
+  executionStats: {
+    nReturned: 5001,
+    executionTimeMillis: 41,
+    totalKeysExamined: 0,
+    totalDocsExamined: 50006
+  }
+}
+
+studentdb> // Problem found: stage = COLLSCAN, docsExamined = 50006 for 5001 results
+studentdb> // Fix: create an index on age
+studentdb> db.students.createIndex({ age: 1 })
+age_1
+
+studentdb> db.students.find({ age: 21 }).explain("executionStats").executionStats
+{
+  nReturned: 5001,
+  executionTimeMillis: 9,
+  totalKeysExamined: 5001,
+  totalDocsExamined: 5001
+}
+
+studentdb> // Other explain verbosity modes
+studentdb> db.students.find({ city: "Jaipur" }).explain("queryPlanner")
+studentdb> db.students.find({ city: "Jaipur" }).explain("executionStats")
+studentdb> db.students.find({ city: "Jaipur" }).explain("allPlansExecution")
+
+studentdb> // Key things I checked in explain output:
+studentdb> //   stage            -> COLLSCAN or IXSCAN
+studentdb> //   totalKeysExamined vs nReturned
+studentdb> //   totalDocsExamined vs nReturned
+studentdb> //   executionTimeMillis
+studentdb> //   SORT stage       -> in-memory sort (slow)
+
+
+=====================================================================
+TASK 4: HIDDEN INDEX (Purpose and use)
+=====================================================================
+
+studentdb> // Purpose: test what happens if an index is removed, WITHOUT dropping it.
+studentdb> // Hidden index is still maintained on writes but ignored by the query planner.
+
+studentdb> db.students.hideIndex("idx_city")
+{ hidden_old: false, hidden_new: true, ok: 1 }
+
+studentdb> db.students.getIndexes().filter(i => i.name == "idx_city")
+[ { v: 2, key: { city: 1 }, name: 'idx_city', hidden: true } ]
+
+studentdb> db.students.find({ city: "Jaipur" }).explain().queryPlanner.winningPlan.stage
+COLLSCAN
+
+studentdb> // Query became a COLLSCAN --> this index is needed, so do NOT drop it.
+studentdb> db.students.unhideIndex("idx_city")
+{ hidden_old: true, hidden_new: false, ok: 1 }
+
+studentdb> db.students.find({ city: "Jaipur" }).explain().queryPlanner.winningPlan.stage
+FETCH
+
+studentdb> // Create an index that is hidden from the start
+studentdb> db.students.createIndex({ course: 1 }, { hidden: true })
+course_1
+
+studentdb> // Alternative using collMod
+studentdb> db.runCommand({
+...   collMod: "students",
+...   index: { name: "course_1", hidden: false }
+... })
+{ hidden_old: true, hidden_new: false, ok: 1 }
+
+
+=====================================================================
+TASK 5: ERROR HANDLING (Common issues during index creation)
+=====================================================================
+
+----- ERROR 1: Duplicate key while creating UNIQUE index -----
+
+studentdb> db.students.insertOne({ name: "Dup", email: "rahul@example.com", age: 25 })
+{ acknowledged: true, insertedId: ObjectId('671e4d0c9b2f3d5a7c8f0a01') }
+
+studentdb> db.students.createIndex({ email: 1 }, { unique: true, name: "uniq_email" })
+MongoServerError: Index build failed: 3f1a6c2e-8b4d-4e1a-9c77-2d5e0b8f1a90: Collection studentdb.students ( 7c9d1e44-52a3-4b0f-8e16-aa0c3f9d2b11 ) :: caused by :: E11000 duplicate key error collection: studentdb.students index: uniq_email dup key: { email: "rahul@example.com" }
+
+studentdb> // Fix: find duplicates, remove them, then create the index again
+studentdb> db.students.aggregate([
+...   { $group: { _id: "$email", count: { $sum: 1 }, ids: { $push: "$_id" } } },
+...   { $match: { count: { $gt: 1 } } }
+... ])
+[
+  {
+    _id: 'rahul@example.com',
+    count: 2,
+    ids: [ ObjectId('671e4a5e9b2f3d5a7c8e1f21'), ObjectId('671e4d0c9b2f3d5a7c8f0a01') ]
+  }
+]
+
+studentdb> db.students.deleteOne({ _id: ObjectId('671e4d0c9b2f3d5a7c8f0a01') })
+{ acknowledged: true, deletedCount: 1 }
+
+studentdb> db.students.dropIndex("email_1")
+{ nIndexesWas: 8, ok: 1 }
+
+studentdb> db.students.createIndex({ email: 1 }, { unique: true, name: "uniq_email" })
+uniq_email
+
+
+----- ERROR 2: Same name, different options (index conflict) -----
+
+studentdb> db.students.createIndex({ city: 1 }, { sparse: true })
+MongoServerError: An existing index has the same name as the requested index. When index names are not specified, they are auto generated and can cause conflicts. Please refer to our documentation. Requested index: { v: 2, key: { city: 1 }, name: "city_1", sparse: true }, existing index: { v: 2, key: { city: 1 }, name: "idx_city" }
+
+studentdb> // Note: Same key pattern with different options is not allowed.
+studentdb> // Fix: drop the old index first, or give the new one a different key/option set.
+studentdb> db.students.dropIndex("idx_city")
+{ nIndexesWas: 8, ok: 1 }
+studentdb> db.students.createIndex({ city: 1 }, { sparse: true, name: "idx_city_sparse" })
+idx_city_sparse
+
+
+----- ERROR 3: Parallel arrays in a compound index -----
+
+studentdb> db.students.insertOne({ name: "Test", skills: ["a","b"], hobbies: ["x","y"] })
+{ acknowledged: true, insertedId: ObjectId('671e4e2a9b2f3d5a7c8f0a02') }
+
+studentdb> db.students.createIndex({ skills: 1, hobbies: 1 })
+MongoServerError: Index build failed: 9a2b...:: caused by :: cannot index parallel arrays [hobbies] [skills]
+
+studentdb> // Rule: a compound index can have at most ONE array field per document.
+studentdb> db.students.deleteOne({ name: "Test" })
+{ acknowledged: true, deletedCount: 1 }
+
+
+----- ERROR 4: Invalid index specification -----
+
+studentdb> db.students.createIndex({ age: "abc" })
+MongoServerError: Error in specification { name: "age_abc", key: { age: "abc" } } :: caused by :: Unknown index plugin 'abc'
+
+
+----- ERROR 5: Dropping an index that does not exist -----
+
+studentdb> db.students.dropIndex("xyz_1")
+MongoServerError: index not found with name [xyz_1]
+
+
+----- ERROR 6: Trying to drop the _id index -----
+
+studentdb> db.students.dropIndex("_id_")
+MongoServerError: cannot drop _id index
+
+
+----- ERROR 7: Duplicate insert after unique index exists -----
+
+studentdb> db.students.insertOne({ name: "Again", email: "rahul@example.com" })
+MongoServerError: E11000 duplicate key error collection: studentdb.students index: uniq_email dup key: { email: "rahul@example.com" }
+
+
+----- ERROR 8: Too many indexes / index name too long (info) -----
+studentdb> // A collection can have at most 64 indexes.
+studentdb> // Index name + namespace must be within the allowed length limit.
+
+
+=====================================================================
+TASK 6: INDEX VALIDATION (Is my query using an index?)
+=====================================================================
+
+----- 6.1 Using explain() -----
+
+studentdb> db.students.find({ marks: { $gt: 90 } }).explain().queryPlanner.winningPlan
+{
+  stage: 'FETCH',
+  inputStage: {
+    stage: 'IXSCAN',
+    keyPattern: { marks: -1 },
+    indexName: 'marks_-1'
+  }
+}
+studentdb> // IXSCAN + indexName  --> index IS being used
+
+----- 6.2 Using hint() to force an index -----
+
+studentdb> db.students.find({ city: "Delhi" }).hint({ city: 1 }).explain().queryPlanner.winningPlan.inputStage.indexName
+idx_city_sparse
+
+studentdb> db.students.find({ city: "Delhi" }).hint({ $natural: 1 }).explain().queryPlanner.winningPlan.stage
+COLLSCAN
+
+----- 6.3 Using $indexStats (how often each index is used) -----
+
+studentdb> db.students.aggregate([{ $indexStats: {} }]).forEach(i => print(i.name + "  ->  ops: " + i.accesses.ops))
+_id_  ->  ops: 0
+uniq_email  ->  ops: 3
+marks_-1  ->  ops: 2
+course_1_marks_-1  ->  ops: 1
+skills_1  ->  ops: 1
+name_1_email_1  ->  ops: 0
+age_1  ->  ops: 1
+idx_city_sparse  ->  ops: 2
+course_1  ->  ops: 0
+
+studentdb> // Indexes with ops: 0 are candidates to hide and then drop.
+
+----- 6.4 Index size & stats -----
+
+studentdb> db.students.stats().indexSizes
+{
+  _id_: 540672,
+  uniq_email: 1802240,
+  'marks_-1': 344064,
+  'course_1_marks_-1': 622592,
+  skills_1: 786432,
+  name_1_email_1: 2420736,
+  age_1: 389120,
+  idx_city_sparse: 405504,
+  course_1: 380928
+}
+
+----- 6.5 Covered query check (totalDocsExamined = 0) -----
+
+studentdb> db.students.find({ course: "MCA", marks: { $gt: 50 } }, { _id: 0, course: 1, marks: 1 }).explain("executionStats").executionStats
+{
+  nReturned: 6247,
+  totalKeysExamined: 6247,
+  totalDocsExamined: 0
+}
+studentdb> // totalDocsExamined: 0 --> COVERED query (answered entirely from the index)
+
+
+=====================================================================
+TASK 7: OPTIMIZING INDEX ORDER FOR PERFORMANCE
+=====================================================================
+
+studentdb> // Rule (ESR): Equality fields first, then Sort fields, then Range fields.
+studentdb> // Query: course = "BCA", sort by age, range on marks > 60
+
+studentdb> // ---- Bad order: Range first ----
+studentdb> db.students.createIndex({ marks: 1, age: 1, course: 1 }, { name: "bad_order" })
+bad_order
+
+studentdb> db.students.find({ course: "BCA", marks: { $gt: 60 } }).sort({ age: 1 }).hint("bad_order").explain("executionStats").executionStats
+{
+  nReturned: 7587,
+  executionTimeMillis: 38,
+  totalKeysExamined: 18290,
+  totalDocsExamined: 12460
+}
+
+studentdb> // ---- Good order: Equality, Sort, Range (ESR) ----
+studentdb> db.students.createIndex({ course: 1, age: 1, marks: 1 }, { name: "good_order_ESR" })
+good_order_ESR
+
+studentdb> db.students.find({ course: "BCA", marks: { $gt: 60 } }).sort({ age: 1 }).hint("good_order_ESR").explain("executionStats").executionStats
+{
+  nReturned: 7587,
+  executionTimeMillis: 14,
+  totalKeysExamined: 9210,
+  totalDocsExamined: 7587
+}
+
+studentdb> // Check there is NO in-memory SORT stage in the good plan
+studentdb> db.students.find({ course: "BCA", marks: { $gt: 60 } }).sort({ age: 1 }).hint("good_order_ESR").explain().queryPlanner.winningPlan
+{
+  stage: 'FETCH',
+  inputStage: {
+    stage: 'IXSCAN',
+    keyPattern: { course: 1, age: 1, marks: 1 },
+    indexName: 'good_order_ESR',
+    direction: 'forward'
+  }
+}
+studentdb> // No SORT stage --> sorting is done by the index itself
+
+studentdb> // ---- Prefix rule demo ----
+studentdb> // Index {course:1, age:1, marks:1} supports:
+studentdb> //   { course }
+studentdb> //   { course, age }
+studentdb> //   { course, age, marks }
+studentdb> // It does NOT efficiently support { age } or { marks } alone.
+studentdb> db.students.find({ marks: 70 }).explain().queryPlanner.winningPlan.inputStage.indexName
+marks_-1
+
+studentdb> // ---- Sort direction check ----
+studentdb> db.students.find().sort({ course: 1, marks: -1 }).explain().queryPlanner.winningPlan.inputStage.indexName
+course_1_marks_-1
+studentdb> db.students.find().sort({ course: 1, marks: 1 }).explain().queryPlanner.winningPlan.stage
+SORT
+studentdb> // Mixed directions must match the index (or its exact reverse), otherwise a SORT stage appears.
+
+studentdb> // ---- Clean up the bad index (hide first, then drop) ----
+studentdb> db.students.hideIndex("bad_order")
+{ hidden_old: false, hidden_new: true, ok: 1 }
+studentdb> db.students.dropIndex("bad_order")
+{ nIndexesWas: 10, ok: 1 }
+
+
+=====================================================================
+FINAL CHECK
+=====================================================================
+
+studentdb> db.students.getIndexes().map(i => i.name)
+[
+  '_id_',
+  'uniq_email',
+  'marks_-1',
+  'course_1_marks_-1',
+  'skills_1',
+  'name_1_email_1',
+  'age_1',
+  'idx_city_sparse',
+  'course_1',
+  'good_order_ESR'
+]
+
+studentdb> db.students.totalIndexSize()
+7942144
+
+studentdb> exit
+
+C:\Users\Student>
