@@ -1,0 +1,126 @@
+Microsoft Windows [Version 10.0.19045.3693]
+(c) Microsoft Corporation. All rights reserved.
+
+
+=====================================================================
+TASK 0: START THE REPLICA SET AND CONNECT
+=====================================================================
+
+C:\Users\Student> tasklist | findstr mongod
+mongod.exe                    8124 Console                    1    212,640 K
+mongod.exe                    9376 Console                    1    208,112 K
+mongod.exe                   10248 Console                    1    205,984 K
+
+C:\Users\Student> mongosh "mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=rs0"
+Current Mongosh Log ID: 6721b2c4d5e6f7a8b9c0d1e2
+Using MongoDB:   7.0.12
+Using Mongosh:   2.2.10
+
+rs0 [primary] test> rs.status().members.map(m => m.name + " -> " + m.stateStr)
+[
+  'localhost:27017 -> PRIMARY',
+  'localhost:27018 -> SECONDARY',
+  'localhost:27019 -> SECONDARY'
+]
+
+
+=====================================================================
+TASK 1: OPLOG - WHAT IT IS
+=====================================================================
+
+REM The oplog is a special CAPPED collection: local.oplog.rs
+REM   - Exists on every replica set member.
+REM   - Primary writes every data change into it (insert/update/delete/command).
+REM   - Secondaries read the oplog of their sync source and APPLY the same operations.
+REM   - Capped = fixed size. When full, the oldest entries are overwritten.
+REM   - Entries are IDEMPOTENT: applying the same entry twice gives the same result.
+
+----- 1.1 Look at the oplog collection -----
+
+rs0 [primary] test> use local
+switched to db local
+
+rs0 [primary] local> show collections
+oplog.rs
+replset.election
+replset.minvalid
+replset.oplogTruncateAfterPoint
+startup_log
+system.replset
+system.rollback.id
+
+rs0 [primary] local> db.oplog.rs.isCapped()
+true
+
+rs0 [primary] local> db.oplog.rs.stats().maxSize
+134217728
+
+rs0 [primary] local> db.oplog.rs.stats().size
+2316482
+
+rs0 [primary] local> db.oplog.rs.countDocuments({})
+5127
+
+----- 1.2 Latest and oldest oplog entry -----
+
+rs0 [primary] local> db.oplog.rs.find().sort({ $natural: -1 }).limit(1)
+[
+  {
+    op: 'n',
+    ns: '',
+    o: { msg: 'periodic noop' },
+    ts: Timestamp({ t: 1730095512, i: 1 }),
+    t: Long('1'),
+    v: Long('2'),
+    wall: ISODate('2026-10-28T06:25:12.004Z')
+  }
+]
+
+rs0 [primary] local> db.oplog.rs.find().sort({ $natural: 1 }).limit(1)
+[
+  {
+    op: 'n',
+    ns: '',
+    o: { msg: 'initiating set' },
+    ts: Timestamp({ t: 1730000111, i: 1 }),
+    t: Long('1'),
+    v: Long('2'),
+    wall: ISODate('2026-10-27T05:35:11.220Z')
+  }
+]
+
+REM Fields of an oplog entry:
+REM   ts   = timestamp (seconds + counter), unique and ordered
+REM   t    = term (increases after every election)
+REM   op   = operation type
+REM   ns   = namespace (database.collection)
+REM   o    = the operation itself (document inserted / update description / command)
+REM   o2   = for updates: which document was updated (the _id)
+REM   wall = wall clock time
+
+REM Operation types (op):
+REM   i = insert     u = update     d = delete
+REM   c = command (createCollection, createIndexes, drop ...)
+REM   n = no-op (heartbeat / informational)
+
+
+=====================================================================
+TASK 2: WATCH OPLOG ENTRIES BEING CREATED
+=====================================================================
+
+----- 2.1 INSERT -> op: 'i' -----
+
+rs0 [primary] local> use schooldb
+switched to db schooldb
+
+rs0 [primary] schooldb> db.marks.insertOne({ _id: 1, name: "Rahul", marks: 78 })
+{ acknowledged: true, insertedId: 1 }
+
+rs0 [primary] schooldb> db.getSiblingDB("local").oplog.rs.find({ ns: "schooldb.marks" }).sort({ $natural: -1 }).limit(1)
+[
+  {
+    lsid: ..., 
+    op: 'i',
+    ns: 'schooldb.marks',
+    ui: UUID('5b8c0f4e-2d1a-4c77-9a3e-6f1d2b7e8c90'),
+    o: { _id: 1, name: 'Rahul', marks:
